@@ -13,7 +13,9 @@
 #include<ros/ros.h> 
 #include <stdlib.h>
 #include <math.h>
-
+#include "opencv2/imgcodecs.hpp"
+#include "opencv2/highgui.hpp"
+#include "opencv2/imgproc.hpp"
 #include <sensor_msgs/PointCloud2.h> 
 #include <pcl_ros/point_cloud.h> //to convert between PCL and ROS
 #include <pcl_ros/transforms.h>
@@ -38,29 +40,55 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <iostream>
 #include <xform_utils/xform_utils.h>
+#include <sensor_msgs/PointCloud2.h> 
+#include <pcl_ros/point_cloud.h> //use these to convert between PCL and ROS datatypes
+//#include <pcl/ros/conversions.h>
+#include <pcl/conversions.h>
+//#include <pcl-1.7/pcl/point_cloud.h>
+//#include <pcl-1.7/pcl/PCLHeader.h>
+#include <pcl_ros/point_cloud.h>
+
+#include <stdio.h> 
 
 
 static const std::string OPENCV_WINDOW = "Open-CV display window";
 using namespace std;
 using namespace cv;
 
+bool got_kinect_image = false; //snapshot indicator
+pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclCam_clr_ptr(new pcl::PointCloud<pcl::PointXYZRGB>); //pointer for color version of pointcloud
+
+// Function for convertion 
+double Convert(double radian){ 
+    double pi = 3.14159; 
+    return(radian * (180/pi)); 
+} 
+void kinectCB(const sensor_msgs::PointCloud2ConstPtr& cloud) {
+    if (!got_kinect_image) { // once only, to keep the data stable
+        ROS_INFO("got new image");
+        pcl::fromROSMsg(*cloud, *pclCam_clr_ptr);
+        ROS_INFO("image has  %d * %d points", pclCam_clr_ptr->width, pclCam_clr_ptr->height);
+        got_kinect_image = true;
+    }
+}
 
 //magic numbers for filtering pointcloud points:
 //specify the min and max values, x,y, znd z, for points to retain...
 // as expressed in the robot's torso frame (torso_lift_link)
-const float MIN_X = 0.45; //include points starting 0.4m in front of robot
-const float MAX_X = 0.85; //include points out to 0.9m in front of robot
+const float MIN_X = 0.35; //include points starting 0.4m in front of robot
+const float MAX_X = 0.8; //include points out to 0.9m in front of robot
 const float MIN_Y = -0.5; //include points starting -0.5m to left of robot
 const float MAX_Y = 0.5; //include points up to 0.5m to right of robot
 const float MIN_Z = -0.05; //2cm above the table top
 const float MAX_Z = 0.1; //consider points up to this height w/rt torso frame
 
-const float TABLE_TOP_MIN = -0.09;
+const float TABLE_TOP_MIN = -0.1;
 const float TABLE_TOP_MAX = 0.05;
+
 //choose, e.g., resolution of 5mm, so 100x200 image for 0.5m x 1.0m pointcloud
 // adjustable--> image  size
 // try 400 pix/m...works fine, i.e. 2.5mm resolution
-const float PIXELS_PER_METER = 400.0; //200.0;
+const float PIXELS_PER_METER = 450.0; //200.0;
 
 const int Nu = (int) ((MAX_X - MIN_X) * PIXELS_PER_METER);
 const int Nv = (int) ((MAX_Y - MIN_Y) * PIXELS_PER_METER);
@@ -73,13 +101,6 @@ vector<float> g_x_centroids,g_y_centroids;
 vector<float> g_x_centroids_wrt_robot,g_y_centroids_wrt_robot;
 vector<float> g_avg_z_heights;
 vector<float> g_npts_blobs;
-
-const float MID_X_PIXEL = 199;
-const float MID_Y_PIXEL = 99;
-
-//choose, e.g., resolution of 5mm, so 100x200 image for 0.5m x 1.0m pointcloud
-// adjustable--> image  size
-// try 400 pix/m...works fine, i.e. 2.5mm resolution
 vector<float> x_centroids;
 vector<float> y_centroids;
 //Global Variable for object orientatinos about z-axis
@@ -90,6 +111,7 @@ vector<geometry_msgs::Quaternion> vec_of_quat;
 Eigen::Vector3f major_axis_,centroid_,plane_normal;
 
 XformUtils *g_xform_ptr;
+
 
 void find_indices_box_filtered(pcl::PointCloud<pcl::PointXYZRGB>::Ptr input_cloud_ptr, Eigen::Vector3f box_pt_min,
         Eigen::Vector3f box_pt_max, vector<int> &indices) {
@@ -167,6 +189,13 @@ Eigen::Affine3f compute_affine_cam_wrt_torso_lift_link(void) {
     affine_cam_wrt_torso.linear() = R_cam;
     return affine_cam_wrt_torso;
 }
+
+//given a binary image in bw_img, find and label connected regions  (blobs)
+// labelImage will contain integer labels with 0= background, 1 = first blob found,
+// ...up to nBlobs
+// also creates a colored image such that each blob found gets assigned  a
+// unique color, suitable for display and visual interpretation,  though this is
+// NOT needed by the robot
 void find_orientation(Eigen::MatrixXf points_mat, float &orientation, geometry_msgs::Quaternion &quaternion) {
     //ROS_INFO("starting identification of plane from data: ");
     int npts = points_mat.cols(); // number of points = number of columns in matrix; check the size
@@ -286,16 +315,6 @@ void find_orientation(Eigen::MatrixXf points_mat, float &orientation, geometry_m
     //ROS_INFO("plane normal: %f, %f, %f",plane_normal(0),plane_normal(1),plane_normal(2));
 }
 
-//given a binary image in bw_img, find and label connected regions  (blobs)
-// labelImage will contain integer labels with 0= background, 1 = first blob found,
-// ...up to nBlobs
-// also creates a colored image such that each blob found gets assigned  a
-// unique color, suitable for display and visual interpretation,  though this is
-// NOT needed by the robot
-
-
-
-
 void blob_color(void) {
 
     //openCV function to do all the  hard work
@@ -341,15 +360,16 @@ void blob_color(void) {
     for (int label = 0; label < nLabels; ++label) {
         g_x_centroids[label]/=g_npts_blobs[label];
         g_y_centroids[label]/=g_npts_blobs[label];
-
-        ROS_INFO("label %d has %f points w/ centroid %f, %f:",label,g_npts_blobs[label],g_x_centroids[label],g_y_centroids[label]);
+        if(g_npts_blobs[label] > 10.0 && g_npts_blobs[label] <1200.0)
+        	ROS_INFO("label %d has %f points w/ centroid %f, %f:",label,g_npts_blobs[label],g_x_centroids[label],g_y_centroids[label]);
     }
     //convert to robot coords:
     //convert to dpixel_x, dpixel_y w/rt image centroid, scale by pixels/m, and add offset from PCL cropping, x,y
     for (int label = 1; label < nLabels; ++label) {    
         g_x_centroids_wrt_robot[label] = ((dst.rows/2) - g_x_centroids[label])/PIXELS_PER_METER + (MIN_X+MAX_X)/2.0;
         g_y_centroids_wrt_robot[label] = (g_y_centroids[label]- (dst.cols/2))/PIXELS_PER_METER + (MIN_Y+MAX_Y)/2.0;
-        ROS_INFO("label %d has centroid w/rt robot: %f, %f:",label,g_x_centroids_wrt_robot[label],g_y_centroids_wrt_robot[label]);
+        if(g_npts_blobs[label] > 10.0 && g_npts_blobs[label] <1200.0)
+        	ROS_INFO("label %d has centroid w/rt robot: %f, %f:",label,g_x_centroids_wrt_robot[label],g_y_centroids_wrt_robot[label]);
                 
     }    
     //display the result in an openCV window
@@ -375,7 +395,7 @@ void blob_color(void) {
 		//add pi/2 to factor in rotated camera frame wrt robot
 		orientations.push_back(angle);
 		vec_of_quat.push_back(quat);
-}
+ }
 }
 
 int main(int argc, char** argv) {
@@ -383,7 +403,7 @@ int main(int argc, char** argv) {
     ros::NodeHandle nh;
     //various pointcloud holders:
     // input, transformed input, downsampled input, box-filtered cloud
-    pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclCam_clr_ptr(new pcl::PointCloud<pcl::PointXYZRGB>); //pointer for color version of pointcloud
+    //pcl::PointCloud<pcl::PointXYZRGB>::Ptr pclCam_clr_ptr(new pcl::PointCloud<pcl::PointXYZRGB>); //pointer for color version of pointcloud
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr downsampled_cloud_ptr(new pcl::PointCloud<pcl::PointXYZRGB>); //ptr to hold filtered Kinect image
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr box_filtered_cloud_ptr(new pcl::PointCloud<pcl::PointXYZRGB>); //ptr to hold filtered Kinect image
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr transformed_cloud_ptr(new pcl::PointCloud<pcl::PointXYZRGB>);
@@ -391,14 +411,27 @@ int main(int argc, char** argv) {
     Eigen::Affine3f A_plane_wrt_camera;
 
     //load a PCD file using pcl::io function; in a robot system, subscribe to pointcloud topic instead    
-    string fname;
-    cout << "enter pcd file name: "; //prompt to enter file name
-    cin >> fname;
-    if (pcl::io::loadPCDFile<pcl::PointXYZRGB> (fname, *pclCam_clr_ptr) == -1) //* load the file
+    char cont;
+    float bucket_height;
+    cout << "Press 's' to take a screenshot :  "; //prompt to enter file name
+    cin >> cont;
+    if (cont =='s' || cont =='S' ) //* load the file
     {
-        ROS_ERROR("Couldn't read file \n");
-        return (-1);
+
+		ros::Subscriber pointcloud_subscriber = nh.subscribe("/head_camera/depth_registered/points", 1, kinectCB);
+		 ///kinect/depth/points
+    //spin until obtain a snapshot
+	    ROS_INFO("waiting for image data");
+	    while (!got_kinect_image) {
+	        ROS_INFO("waiting...");
+	        ros::spinOnce();
+	        ros::Duration(0.5).sleep();
+	    }
+	    ROS_INFO("got snapshot;");
+  
     }
+    
+
     //PCD file does not seem to record the reference frame;  set frame_id manually
     pclCam_clr_ptr->header.frame_id = "head_camera_rgb_optical_frame";
     ROS_INFO("view frame head_camera_rgb_optical_frame on topic pcd");
@@ -436,15 +469,18 @@ int main(int argc, char** argv) {
 
     int npts = transformed_cloud_ptr->points.size();
     cout << "npts transformed = " << npts << endl;
+    cout<<"camera Depth perception: ";
+    cin>>bucket_height;
 
     //don't need this any more; already found the table height
     // but run it just for fun; remove later for better speed
-    double table_height = find_table_height(transformed_cloud_ptr, TABLE_TOP_MIN, TABLE_TOP_MAX, 0.01);
+    double table_height = find_table_height(transformed_cloud_ptr, TABLE_TOP_MIN, TABLE_TOP_MAX, 0.001);
 
     //specify opposite corners of a box to box-filter the transformed points
-    //magic numbers are at top of this program
+    //magic numbers are at top of this program]
+    cout<<"table height:- "<<table_height<<endl;
     Eigen::Vector3f box_pt_min, box_pt_max;
-    box_pt_min << MIN_X, MIN_Y, table_height+0.01; //1cm above table top
+    box_pt_min << MIN_X, MIN_Y, table_height + bucket_height/float(100); //1cm above table top
     box_pt_max << MAX_X, MAX_Y, MAX_Z;
 
     //find which points in the transformed cloud are within the specified box
@@ -480,6 +516,7 @@ int main(int argc, char** argv) {
             //flip/invert these so image makes sense visually
             u = Nu - u;
             v = Nv - v;
+
             //make sure the computed indices fit within the matrix size:
             if ((u > 0)&&(u < Nu - 1)&&(v > 0)&&(v < Nv - 1)) {
                 bw_img(u, v) = 255; //assign this pixel to be white
@@ -491,7 +528,8 @@ int main(int argc, char** argv) {
     //find connected components; 
     //operates on global bw_img and puts region-labeled codes in global Mat "labelImage" 
     blob_color();
-    for(int i = 1; i < x_centroids.size(); i++){
+    
+     for(int i = 1; i < x_centroids.size(); i++){
     	ROS_INFO("x,y = %.2f, %.2f", x_centroids.at(i), y_centroids.at(i));
     }
 
@@ -503,9 +541,7 @@ int main(int argc, char** argv) {
 		ROS_INFO("quaternion of object %d", (i+1));
 		cout<< vec_of_quat.at(i) << endl;
 	}
-
     
-
     //create openCV display windows
     // this is only for debugging; can go away later
     namedWindow("Image", WINDOW_AUTOSIZE);
@@ -514,8 +550,71 @@ int main(int argc, char** argv) {
     //display the original B/W image as well:
     imshow("Image", bw_img); //display the binary image
     imshow("Connected Components", dst);
-    waitKey(0); //this is needed to update openCV display windows;
-    //it can go away later
+    imwrite( "BucketImage.png", dst );
 
+     float min_points=0.0, max_points=95.0;
+   
+     //this is needed to update openCV display windows;
+    
+    cout<<"Started hough tranformation\n";
+     Mat dst = imread( "BucketImage.png", IMREAD_GRAYSCALE );
+    Mat dst1, cdst, cdstP;
+    // Edge detection
+    Canny(dst, dst1, 50, 200, 3);
+    // Copy edges to the images that will display the results in BGR
+    cvtColor(dst1, cdst, COLOR_GRAY2BGR);
+    cdstP = cdst.clone();
+    // Standard Hough Line Transform
+    vector<Vec2f> lines; // will hold the results of the detection
+    HoughLines(dst1, lines, 1, CV_PI/180, 30, 0, 0); // runs the actual detection
+    cout<<"Started detection\n";
+    // Draw the lines
+    for( size_t i = 0; i < lines.size(); i++ )
+    {
+        float rho = lines[i][0], theta = lines[i][1];
+        Point pt1, pt2;
+        double a = cos(theta), b = sin(theta);
+        double x0 = a*rho, y0 = b*rho;
+        pt1.x = cvRound(x0 + 1000*(-b));
+        pt1.y = cvRound(y0 + 1000*(a));
+        pt2.x = cvRound(x0 - 1000*(-b));
+        pt2.y = cvRound(y0 - 1000*(a));
+        line( cdst, pt1, pt2, Scalar(0,0,255), 3, CV_AA);
+    }
+    // Probabilistic Line Transform
+    vector<Vec4i> linesP; // will hold the results of the detection
+    HoughLinesP(dst, linesP, 1, CV_PI/180, 20, min_points, max_points ); // runs the actual detection
+    // Draw the lines
+    cout<<"Started drawing lines\n";
+
+    cout<<linesP.size()<<"\n";
+ 
+    for( size_t i = 0; i < linesP.size(); i++ )
+    {
+        Vec4i l = linesP[i];
+        Point p1, p2;
+        p1=Point(l[0], l[1]);
+        p2=Point(l[2], l[3]);
+        float length = sqrt(pow((l[2] - l[0]),2) + pow((l[3] - l[1]),2));
+        float angle = atan2(p1.y - p2.y, p1.x - p2.x);
+        line( cdstP, Point(l[0], l[1]), Point(l[2], l[3]), Scalar(0,0,255), 3, LINE_AA);
+        cout<<"The start coordinates are :"<<linesP[i][0] << "," << linesP[i][1] << endl;
+        cout<<"The end coordinates are :"<< linesP[i][2] << "," << linesP[i][3] << endl;
+         cout<<"The angle in radians is :"<<angle << "\nangle in degrees: "<<Convert(angle)<<endl;
+         cout<<"The length of the line is: " << length << endl;
+         cout << "=================" << endl;
+    }
+    cout<<"Completed\n";
+    // Show results
+    imshow("Source", dst);
+    //imshow("Detected Lines (in red) - Standard Hough Line Transform", cdst);
+    imshow("Detected Lines (in red) - Probabilistic Line Transform", cdstP);
+    imwrite( "TestImage.png", cdstP );
+
+    Mat bw, img = imread("TestImage.png");
+    cvtColor(img, bw, COLOR_BGR2GRAY);
+
+    // Wait and Exit
+    waitKey();
     return 0;
 }
