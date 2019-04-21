@@ -413,10 +413,7 @@ int main(int argc, char** argv) {
     //load a PCD file using pcl::io function; in a robot system, subscribe to pointcloud topic instead    
     char cont;
     float bucket_height;
-    cout << "Press 's' to take a screenshot :  "; //prompt to enter file name
-    cin >> cont;
-    if (cont =='s' || cont =='S' ) //* load the file
-    {
+
 
 		ros::Subscriber pointcloud_subscriber = nh.subscribe("/head_camera/depth_registered/points", 1, kinectCB);
 		 ///kinect/depth/points
@@ -429,7 +426,7 @@ int main(int argc, char** argv) {
 	    }
 	    ROS_INFO("got snapshot;");
   
-    }
+    
     
 
     //PCD file does not seem to record the reference frame;  set frame_id manually
@@ -588,22 +585,59 @@ int main(int argc, char** argv) {
     cout<<"Started drawing lines\n";
 
     cout<<linesP.size()<<"\n";
- 
-    for( size_t i = 0; i < linesP.size(); i++ )
+    vector<Vec4i> line_group1;
+    vector<Vec4i> line_group2;
+    vector<float> angle_group1;
+    vector<float> angle_group2;
+    Point p1, p2;
+    p1=Point(linesP[0][0], linesP[0][1]);
+    p2=Point(linesP[0][2], linesP[0][3]);
+    float comparison = Convert(atan2(p1.y - p2.y, p1.x - p2.x));
+    line_group1.push_back(linesP[0]);
+    angle_group1.push_back(comparison);
+    cout<<"comparison: "<<comparison<<endl;
+    for( size_t i = 1; i < linesP.size(); i++ )
     {
         Vec4i l = linesP[i];
-        Point p1, p2;
         p1=Point(l[0], l[1]);
         p2=Point(l[2], l[3]);
         float length = sqrt(pow((l[2] - l[0]),2) + pow((l[3] - l[1]),2));
         float angle = atan2(p1.y - p2.y, p1.x - p2.x);
         line( cdstP, Point(l[0], l[1]), Point(l[2], l[3]), Scalar(0,0,255), 3, LINE_AA);
-        cout<<"The start coordinates are :"<<linesP[i][0] << "," << linesP[i][1] << endl;
-        cout<<"The end coordinates are :"<< linesP[i][2] << "," << linesP[i][3] << endl;
-         cout<<"The angle in radians is :"<<angle << "\nangle in degrees: "<<Convert(angle)<<endl;
-         cout<<"The length of the line is: " << length << endl;
-         cout << "=================" << endl;
+        float deg = Convert(angle);
+        cout<<"Degree: "<<deg<<endl;
+        if(fabs(comparison - deg) <= 4.0)
+        {
+            line_group1.push_back(l);
+            angle_group1.push_back(deg);
+
+        }
+        else {
+         line_group2.push_back(l);
+         angle_group2.push_back(deg);
+        }
+
+
+     //   cout<<"The start coordinates are :"<<linesP[i][0] << "," << linesP[i][1] << endl;
+      //  cout<<"The end coordinates are :"<< linesP[i][2] << "," << linesP[i][3] << endl;
+       // cout<<"The angle in radians is :"<<angle << "\nangle in degrees: "<<deg<<endl;
+       // cout<<"The length of the line is: " << length << endl;
+        //cout << "=================" << endl;
+
     }
+
+    float kit_orientation; 
+    cout<<"Group 1 size: "<<angle_group1.size()<<endl;
+    cout<<"Group 2 size: "<<angle_group2.size()<<endl;
+    if(angle_group1.size() > angle_group2.size()){
+        kit_orientation = -1.0 * accumulate(angle_group1.begin(),angle_group1.end(),0) / float(angle_group1.size());
+    }
+    else{
+        kit_orientation = -1.0 * accumulate(angle_group2.begin(),angle_group2.end(),0) / float(angle_group2.size());
+    }
+
+    cout << "Orientation of kit is: " << kit_orientation << endl;
+
     cout<<"Completed\n";
     // Show results
     imshow("Source", dst);
