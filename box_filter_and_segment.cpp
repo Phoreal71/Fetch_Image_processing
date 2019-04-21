@@ -587,6 +587,7 @@ int main(int argc, char** argv) {
     cout<<linesP.size()<<"\n";
     vector<Vec4i> line_group1;
     vector<Vec4i> line_group2;
+    vector<Vec4i> test_group;
     vector<float> angle_group1;
     vector<float> angle_group2;
     Point p1, p2;
@@ -629,11 +630,14 @@ int main(int argc, char** argv) {
     float kit_orientation; 
     cout<<"Group 1 size: "<<angle_group1.size()<<endl;
     cout<<"Group 2 size: "<<angle_group2.size()<<endl;
+
     if(angle_group1.size() > angle_group2.size()){
         kit_orientation = -1.0 * accumulate(angle_group1.begin(),angle_group1.end(),0) / float(angle_group1.size());
+        test_group = line_group1;
     }
     else{
         kit_orientation = -1.0 * accumulate(angle_group2.begin(),angle_group2.end(),0) / float(angle_group2.size());
+        test_group = line_group2;
     }
 
     cout << "Orientation of kit is: " << kit_orientation << endl;
@@ -644,10 +648,26 @@ int main(int argc, char** argv) {
     //imshow("Detected Lines (in red) - Standard Hough Line Transform", cdst);
     imshow("Detected Lines (in red) - Probabilistic Line Transform", cdstP);
     imwrite( "TestImage.png", cdstP );
+    pair<int, int> center_arr[test_group.size()];
+    for( size_t i = 0; i < test_group.size(); i++ )
+    {
+         p1=Point(test_group[i][0], test_group[i][1]);
+         p2=Point(test_group[i][2], test_group[i][3]);
+         center_arr[i] = make_pair((float)((p1.x+p2.x)/2),(float)((p1.y+p2.y)/2));
 
-    Mat bw, img = imread("TestImage.png");
-    cvtColor(img, bw, COLOR_BGR2GRAY);
+    }
+    sort(center_arr, center_arr + test_group.size());
+     cout << "FINAL ARRAY..." << endl;
+    for(int i = 0; i < test_group.size(); i++) {
+        cout << center_arr[i].first << " " << center_arr[i].second << endl;
+    }
+    cout<<endl;
 
+    Mat bw,thr, img = imread("TestImage.png");
+    Point p((float)((center_arr[0].first+center_arr[test_group.size()-1].first)/2),(float)((center_arr[0].second+center_arr[test_group.size()-1].second)/2)); 
+
+    circle(img, p, 5, Scalar(127,0,0), -1);
+    imshow("Image with center",img);
     // Wait and Exit
     waitKey();
     return 0;
